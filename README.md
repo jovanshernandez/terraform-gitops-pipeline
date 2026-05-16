@@ -1,48 +1,84 @@
-# gitops-terraform-jenkins
+# GitOps Terraform Jenkins
 
-## Overview
+Reference implementation for a pull-request driven Terraform workflow in Jenkins. The repo is intentionally small, but it models the controls I expect in a production infrastructure pipeline:
 
-This repository will demonstrate an example GitOps workflow with Terraform and Jenkins.
+- Remote S3 state with DynamoDB locking
+- Terraform formatting and validation before planning
+- Plan artifact archived on every branch
+- Manual approval before production apply
+- `master` branch apply only
+- Parameterized AWS region, AMI, instance count, CIDR ranges, and tags
+- EC2 hardening defaults such as IMDSv2 and encrypted root volumes
 
-The configuration in this repository was updated and now supports `Terraform v0.12.19`.
+## Architecture
 
-Video can be found here:
-
-https://youtu.be/qFjGqPw1NUY
-
-## Requirements
-
-* Terraform installed on Jenkins
-* Correct plugins installed on Jenkins
-* GitHub access token
-* AWS credentials
-* S3 bucket
-
-## Setup Bucket
-
-You will need to create a bucket and reference the bucket name in the following section of `main.tf`:
-
+```text
+GitHub pull request
+  -> Jenkins checkout
+  -> terraform fmt -check
+  -> terraform init
+  -> terraform validate
+  -> terraform plan -out=tfplan
+  -> archive tfplan
+  -> manual approval on master
+  -> terraform apply tfplan
 ```
+
+The Terraform creates a small EC2 fleet behind a security group. HTTP and SSH CIDR ranges are variables so the same workflow can support demo, lab, or controlled internal environments without editing resource code.
+
+## Repository Layout
+
+```text
+.
+├── Jenkinsfile      # CI/CD workflow for plan and gated apply
+├── main.tf          # Provider, backend, EC2, security group
+├── variables.tf     # Typed inputs and validation
+└── output.tf        # Instance IDs and public IPs
+```
+
+## Jenkins Requirements
+
+- Terraform 1.5 or newer installed on Jenkins agents
+- AWS credentials stored in Jenkins as `awsCredentials`
+- S3 bucket and DynamoDB lock table for Terraform state
+- Jenkins plugins:
+  - Pipeline
+  - GitHub Branch Source
+  - Credentials Binding
+  - Workspace Cleanup
+  - AnsiColor
+  - CloudBees AWS Credentials
+
+## State Backend
+
+The backend is configured in `main.tf`:
+
+```hcl
 terraform {
   backend "s3" {
-    bucket = "terraform-bucket-alex"
-    key    = "terraform.tfstate"
-    region = "us-east-1"
+    bucket         = "baxter-terraform-bucket"
+    key            = "gitops-workflow/terraform.tfstate"
+    region         = "us-west-2"
+    dynamodb_table = "terraform-locks"
+    encrypt        = true
   }
 }
 ```
 
-You can also update the key name to whatever you want your state file to be named.
+For a real deployment, create the S3 bucket and DynamoDB lock table before the first pipeline run.
 
-## Plugins Required
+## Local Commands
 
-* [Workspace Cleanup Plugin](https://wiki.jenkins.io/display/JENKINS/Workspace+Cleanup+Plugin)
-* [Credentials Binding Plugin](https://wiki.jenkins.io/display/JENKINS/Credentials+Binding+Plugin)
-* [AnsiColor Plugin](https://wiki.jenkins.io/display/JENKINS/AnsiColor+Plugin)
-* [GitHub Plugin](https://wiki.jenkins.io/display/JENKINS/GitHub+Plugin)
-* [Pipeline Plugin](https://wiki.jenkins.io/display/JENKINS/Pipeline+Plugin)
-* [CloudBees AWS Credentials Plugin](https://wiki.jenkins.io/display/JENKINS/CloudBees+AWS+Credentials+Plugin)
+```bash
+terraform fmt -recursive
+terraform init
+terraform validate
+terraform plan -out=tfplan
+```
 
-## Questions?
+## Design Notes
 
-Open an issue.
+- `master` is the only branch allowed to apply infrastructure changes.
+- Non-`master` branches still produce a plan so reviewers can inspect blast radius.
+- CIDR inputs default to open demo values, but they are isolated in variables to make tightening access explicit.
+- The EC2 metadata endpoint requires tokens to reduce credential exposure from SSRF-style attacks.
