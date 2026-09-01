@@ -54,13 +54,29 @@ variable "root_volume_size" {
 variable "http_cidr_blocks" {
   description = "CIDR blocks allowed to reach HTTP."
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = ["10.0.0.0/8"]
+
+  validation {
+    condition     = alltrue([for cidr in var.http_cidr_blocks : can(cidrhost(cidr, 0))])
+    error_message = "http_cidr_blocks must contain valid CIDR ranges."
+  }
+}
+
+variable "enable_ssh" {
+  description = "Whether to create SSH ingress for environments that still require it."
+  type        = bool
+  default     = false
 }
 
 variable "ssh_cidr_blocks" {
   description = "CIDR blocks allowed to reach SSH."
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = ["10.0.0.0/8"]
+
+  validation {
+    condition     = alltrue([for cidr in var.ssh_cidr_blocks : can(cidrhost(cidr, 0))])
+    error_message = "ssh_cidr_blocks must contain valid CIDR ranges."
+  }
 }
 
 variable "tags" {

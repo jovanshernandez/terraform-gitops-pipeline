@@ -1,0 +1,9 @@
+environment      = "prod"
+instance_count   = 2
+http_cidr_blocks = ["10.0.0.0/8"]
+ssh_cidr_blocks  = ["10.0.0.0/8"]
+tags = {
+  Owner       = "platform"
+  CostCenter  = "demo"
+  Environment = "prod"
+}

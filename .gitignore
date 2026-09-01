@@ -1,2 +1,10 @@
+.terraform/
+tfplan
+tfplan.txt
 *.tfstate
-.terraform
+*.tfstate.*
+crash.log
+*.auto.tfvars
+*.tfvars
+!env/*.tfvars.example
+!backend/*.hcl.example
