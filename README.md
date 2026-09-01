@@ -83,7 +83,3 @@ See [docs/review-checklist.md](docs/review-checklist.md) and [docs/control-model
 - Non-trunk branches still produce a plan so reviewers can inspect blast radius.
 - CIDR inputs default to private ranges, and SSH ingress is disabled unless an environment explicitly enables it.
 - The EC2 metadata endpoint requires tokens to reduce credential exposure from SSRF-style attacks.
-
-## Resume Positioning
-
-This project is strongest on a Platform Engineer resume as an example of infrastructure delivery controls: typed Terraform inputs, remote state and locking, pull-request plans, archived artifacts, branch-gated applies, and manual approval. It is also useful for SRE roles because it shows change management discipline and an awareness of blast radius before production changes.
