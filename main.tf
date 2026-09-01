@@ -8,7 +8,13 @@ terraform {
     }
   }
 
-  backend "s3" {}
+  backend "s3" {
+    bucket         = "baxter-terraform-bucket"
+    key            = "gitops-workflow/terraform.tfstate"
+    region         = "us-west-2"
+    dynamodb_table = "terraform-locks"
+    encrypt        = true
+  }
 }
 
 provider "aws" {
@@ -59,16 +65,12 @@ resource "aws_security_group" "default" {
     cidr_blocks = var.http_cidr_blocks
   }
 
-  dynamic "ingress" {
-    for_each = var.enable_ssh ? [1] : []
-
-    content {
-      description = "SSH"
-      from_port   = 22
-      to_port     = 22
-      protocol    = "tcp"
-      cidr_blocks = var.ssh_cidr_blocks
-    }
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = var.ssh_cidr_blocks
   }
 
   egress {

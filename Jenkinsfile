@@ -11,8 +11,6 @@ pipeline {
   environment {
     AWS_DEFAULT_REGION = 'us-west-2'
     TF_IN_AUTOMATION   = 'true'
-    TF_ENV             = 'dev'
-    APPLY_BRANCH       = 'master'
   }
 
   stages {
@@ -37,7 +35,7 @@ pipeline {
           accessKeyVariable: 'AWS_ACCESS_KEY_ID',
           secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
         ]]) {
-          sh 'terraform init -input=false -backend-config=backend/${TF_ENV}.hcl'
+          sh 'terraform init -input=false'
         }
       }
     }
@@ -56,7 +54,7 @@ pipeline {
           accessKeyVariable: 'AWS_ACCESS_KEY_ID',
           secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
         ]]) {
-          sh 'terraform plan -input=false -var-file=env/${TF_ENV}.tfvars -out=tfplan'
+          sh 'terraform plan -input=false -out=tfplan'
           sh 'terraform show -no-color tfplan > tfplan.txt'
         }
       }
@@ -69,7 +67,7 @@ pipeline {
 
     stage('Approval') {
       when {
-        expression { env.BRANCH_NAME == env.APPLY_BRANCH }
+        branch 'master'
       }
       steps {
         timeout(time: 30, unit: 'MINUTES') {
@@ -80,7 +78,7 @@ pipeline {
 
     stage('Apply') {
       when {
-        expression { env.BRANCH_NAME == env.APPLY_BRANCH }
+        branch 'master'
       }
       steps {
         withCredentials([[
