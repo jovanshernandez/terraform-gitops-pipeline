@@ -2,12 +2,12 @@
 
 Reference implementation for a pull-request driven Terraform workflow in Jenkins. The repo is intentionally small, but it models the controls I expect in a production infrastructure pipeline:
 
-- Remote S3 state with DynamoDB locking
+- Remote S3 state with DynamoDB locking through environment-specific backend files
 - Terraform formatting and validation before planning
 - Plan artifact archived on every branch
 - Manual approval before production apply
-- `master` branch apply only
-- Parameterized AWS region, AMI, instance count, CIDR ranges, and tags
+- Protected trunk-branch apply only
+- Parameterized AWS region, AMI, instance count, CIDR ranges, SSH ingress, and tags
 - EC2 hardening defaults such as IMDSv2 and encrypted root volumes
 - GitHub static checks for formatting and backend-free validation before Jenkins apply
 
@@ -17,7 +17,7 @@ Reference implementation for a pull-request driven Terraform workflow in Jenkins
 GitHub pull request
   -> Jenkins checkout
   -> terraform fmt -check
-  -> terraform init
+  -> terraform init with backend config
   -> terraform validate
   -> terraform plan -out=tfplan
   -> archive tfplan
@@ -33,6 +33,8 @@ The Terraform creates a small EC2 fleet behind a security group. HTTP and SSH CI
 .
 ├── Jenkinsfile      # CI/CD workflow for plan and gated apply
 ├── docs/            # Reviewer and operational guidance
+├── backend/         # Backend examples for state and locking
+├── env/             # Environment variable examples
 ├── main.tf          # Provider, backend, EC2, security group
 ├── variables.tf     # Typed inputs and validation
 └── output.tf        # Instance IDs and public IPs
@@ -53,18 +55,11 @@ The Terraform creates a small EC2 fleet behind a security group. HTTP and SSH CI
 
 ## State Backend
 
-The backend is configured in `main.tf`:
+The backend block is intentionally empty in `main.tf`; each environment supplies its own backend configuration:
 
-```hcl
-terraform {
-  backend "s3" {
-    bucket         = "baxter-terraform-bucket"
-    key            = "gitops-workflow/terraform.tfstate"
-    region         = "us-west-2"
-    dynamodb_table = "terraform-locks"
-    encrypt        = true
-  }
-}
+```bash
+cp backend/dev.hcl.example backend/dev.hcl
+terraform init -backend-config=backend/dev.hcl
 ```
 
 For a real deployment, create the S3 bucket and DynamoDB lock table before the first pipeline run.
@@ -73,20 +68,20 @@ For a real deployment, create the S3 bucket and DynamoDB lock table before the f
 
 ```bash
 terraform fmt -recursive
-terraform init
+terraform init -backend-config=backend/dev.hcl
 terraform validate
-terraform plan -out=tfplan
+terraform plan -var-file=env/dev.tfvars -out=tfplan
 ```
 
 ## Review Workflow
 
-See [docs/review-checklist.md](docs/review-checklist.md) for the checks I would expect before approving a plan. The goal is to make the project demonstrate operational judgment: reviewers should inspect blast radius, access changes, replacement actions, and rollback expectations before applying infrastructure.
+See [docs/review-checklist.md](docs/review-checklist.md) and [docs/control-model.md](docs/control-model.md) for the checks I would expect before approving a plan. The goal is to make the project demonstrate operational judgment: reviewers should inspect blast radius, access changes, replacement actions, and rollback expectations before applying infrastructure.
 
 ## Design Notes
 
-- `master` is the only branch allowed to apply infrastructure changes.
-- Non-`master` branches still produce a plan so reviewers can inspect blast radius.
-- CIDR inputs default to open demo values, but they are isolated in variables to make tightening access explicit.
+- The configured trunk branch is the only branch allowed to apply infrastructure changes.
+- Non-trunk branches still produce a plan so reviewers can inspect blast radius.
+- CIDR inputs default to private ranges, and SSH ingress is disabled unless an environment explicitly enables it.
 - The EC2 metadata endpoint requires tokens to reduce credential exposure from SSRF-style attacks.
 
 ## Resume Positioning

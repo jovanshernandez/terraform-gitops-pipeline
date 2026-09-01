@@ -1,7 +1,10 @@
 .terraform/
-.terraform.lock.hcl
 tfplan
 tfplan.txt
 *.tfstate
 *.tfstate.*
 crash.log
+*.auto.tfvars
+*.tfvars
+!env/*.tfvars.example
+!backend/*.hcl.example
