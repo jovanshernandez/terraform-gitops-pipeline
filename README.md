@@ -9,6 +9,7 @@ Reference implementation for a pull-request driven Terraform workflow in Jenkins
 - `master` branch apply only
 - Parameterized AWS region, AMI, instance count, CIDR ranges, and tags
 - EC2 hardening defaults such as IMDSv2 and encrypted root volumes
+- GitHub static checks for formatting and backend-free validation before Jenkins apply
 
 ## Architecture
 
@@ -31,6 +32,7 @@ The Terraform creates a small EC2 fleet behind a security group. HTTP and SSH CI
 ```text
 .
 ├── Jenkinsfile      # CI/CD workflow for plan and gated apply
+├── docs/            # Reviewer and operational guidance
 ├── main.tf          # Provider, backend, EC2, security group
 ├── variables.tf     # Typed inputs and validation
 └── output.tf        # Instance IDs and public IPs
@@ -76,9 +78,17 @@ terraform validate
 terraform plan -out=tfplan
 ```
 
+## Review Workflow
+
+See [docs/review-checklist.md](docs/review-checklist.md) for the checks I would expect before approving a plan. The goal is to make the project demonstrate operational judgment: reviewers should inspect blast radius, access changes, replacement actions, and rollback expectations before applying infrastructure.
+
 ## Design Notes
 
 - `master` is the only branch allowed to apply infrastructure changes.
 - Non-`master` branches still produce a plan so reviewers can inspect blast radius.
 - CIDR inputs default to open demo values, but they are isolated in variables to make tightening access explicit.
 - The EC2 metadata endpoint requires tokens to reduce credential exposure from SSRF-style attacks.
+
+## Resume Positioning
+
+This project is strongest on a Platform Engineer resume as an example of infrastructure delivery controls: typed Terraform inputs, remote state and locking, pull-request plans, archived artifacts, branch-gated applies, and manual approval. It is also useful for SRE roles because it shows change management discipline and an awareness of blast radius before production changes.
