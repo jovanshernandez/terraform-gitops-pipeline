@@ -1,10 +1,35 @@
+# Terraform working directories and state
 .terraform/
-tfplan
-tfplan.txt
 *.tfstate
 *.tfstate.*
-crash.log
-*.auto.tfvars
+*.tfstate.backup
+.terraform.tfstate.lock.info
+
+# Plans and plan output (may contain sensitive values)
+tfplan
+*.tfplan
+tfplan.txt
+tfplan.json
+plan-summary.md
+
+# Variable files and backend config hold account-specific values; commit only the examples
 *.tfvars
-!env/*.tfvars.example
-!backend/*.hcl.example
+*.tfvars.json
+!*.tfvars.example
+backend.hcl
+*.backend.hcl
+!*.hcl.example
+
+# Provider lock files are committed for environment roots only
+modules/**/.terraform.lock.hcl
+
+# Crash logs and override files
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Scanner output
+reports/

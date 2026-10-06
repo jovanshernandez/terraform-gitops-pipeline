@@ -1,25 +1,28 @@
-# Terraform Review Checklist
+# Terraform review checklist
 
-Use this checklist before approving a plan or applying changes from the Jenkins pipeline.
+Use this before approving a pull request or the Jenkins `input` step.
 
-## Pipeline Controls
+## Pipeline
 
-- Confirm the branch is expected to run `apply`. Only the configured trunk branch should reach the gated apply stage.
-- Review `tfplan.txt` from the archived Jenkins artifacts instead of approving from memory.
-- Confirm the state bucket and lock table are reachable before retrying failed runs.
-- Keep failed plans attached to the build so reviewers can compare the next run.
+- The PR's static checks are green: fmt, validate, `terraform test`, tflint, checkov.
+- The plan comment on the PR comes from the latest commit on the branch.
+- Only `master` reaches Approve and Apply. A branch build that tries to apply is a bug.
+- Approve from `plan-summary.md` and `tfplan.txt` in the build artifacts, not from memory.
+- If the build waited on the `terraform-<env>` lock or the state lock, re-read the
+  plan: something else may have changed the environment first.
 
-## Infrastructure Review
+## Infrastructure
 
-- Check that security group CIDR changes are intentional and documented.
-- Check whether SSH ingress is enabled, and confirm why Session Manager or another private access path is not sufficient.
-- Confirm EC2 AMI, instance type, and instance count changes match the environment.
-- Verify tags include enough ownership context for cost, incident response, and cleanup.
-- Treat replacement or destroy actions as high-risk until the owner confirms them.
+- Every `replace` and `delete` in the summary is expected and explained in the PR.
+- Ingress changes stay inside private ranges and the app port. Port 22 never opens;
+  shell access is through Session Manager.
+- AMI pin bumps replace instances. In prod, confirm instances are spread across
+  subnets so a rolling replacement keeps capacity.
+- Instance type, count and volume changes match the environment's purpose.
+- Tags still identify the owner and service for cost and incident response.
 
-## Operational Readiness
+## After apply
 
-- Confirm rollback is clear before approving production apply.
-- Prefer small, reviewable changes over broad infrastructure updates.
-- Record any manual approval context in the Jenkins build before applying.
-- After apply, verify outputs and AWS resource health before closing the change.
+- Outputs look right (`instance_ids`, `private_ips`).
+- Instances show as managed in Systems Manager and the service passes its health check.
+- The next scheduled drift check for the environment is clean.

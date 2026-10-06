@@ -6,22 +6,84 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "0"
+
 jobs:
-  validate:
+  terraform:
+    name: fmt, validate, test (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - modules/app-host
+          - environments/dev
+          - environments/prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.0
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init (no backend)
+        run: terraform -chdir=${{ matrix.dir }} init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform -chdir=${{ matrix.dir }} validate
+
+      - name: terraform test (mocked AWS provider)
+        run: terraform -chdir=${{ matrix.dir }} test
+
+  tflint:
+    name: tflint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
         with:
-          terraform_version: 1.6.6
+          tflint_version: v0.64.0
 
-      - name: Check formatting
-        run: terraform fmt -check -recursive
+      - name: tflint --init
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Validate syntax without backend access
-        run: |
-          terraform init -backend=false -input=false
-          terraform validate
+      - name: tflint
+        run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
+
+  checkov:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install checkov
+        run: pip install --quiet checkov==3.3.23
+
+      - name: checkov
+        run: checkov -d . --framework terraform --quiet --compact

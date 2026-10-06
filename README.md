@@ -1,85 +1,176 @@
-# GitOps Terraform Jenkins
+# terraform-gitops-pipeline
 
-Reference implementation for a pull-request driven Terraform workflow in Jenkins. The repo is intentionally small, but it models the controls I expect in a production infrastructure pipeline:
+[![Terraform static checks](https://github.com/jovanshernandez/terraform-gitops-pipeline/actions/workflows/terraform-static-checks.yml/badge.svg)](https://github.com/jovanshernandez/terraform-gitops-pipeline/actions/workflows/terraform-static-checks.yml)
 
-- Remote S3 state with DynamoDB locking through environment-specific backend files
-- Terraform formatting and validation before planning
-- Plan artifact archived on every branch
-- Manual approval before production apply
-- Protected trunk-branch apply only
-- Parameterized AWS region, AMI, instance count, CIDR ranges, SSH ingress, and tags
-- EC2 hardening defaults such as IMDSv2 and encrypted root volumes
-- GitHub static checks for formatting and backend-free validation before Jenkins apply
+A reference for delivering Terraform the GitOps way: every change is a pull
+request, every pull request gets static checks and a saved plan posted for
+review, and only the trunk branch can apply, one environment at a time, behind
+an approval gate. It pairs a Jenkins declarative pipeline (plan, approve, apply)
+with GitHub Actions (offline checks on every PR), and a small hardened EC2
+module with a root per environment. The pipeline and tests run here; the stack
+has not been applied to a live AWS account.
 
-## Architecture
+![How a change moves from pull request to apply](docs/images/gitops-flow.png)
 
-```text
-GitHub pull request
-  -> Jenkins checkout
-  -> terraform fmt -check
-  -> terraform init with backend config
-  -> terraform validate
-  -> terraform plan -out=tfplan
-  -> archive tfplan
-  -> manual approval on master
-  -> terraform apply tfplan
+![terraform test passing against the mocked AWS provider](docs/images/terraform-test.png)
+
+## The problem
+
+Terraform run from laptops drifts: people apply unreviewed plans, apply from
+feature branches, race each other on the same state, and nobody notices when the
+live environment stops matching the code. This repo shows the controls that fix
+that, in a form small enough to read in one sitting:
+
+- Plans are produced by the pipeline, saved, and reviewed before anything runs.
+- Only `master` applies, and it applies the exact saved plan that was approved.
+- prod always needs a named approver; dev needs one when a plan deletes or replaces.
+- Plan and apply use different credentials, and the apply credentials only exist
+  in the Apply stage.
+- A nightly plan-only run flags drift between `master` and what is deployed.
+
+## Features
+
+- **Jenkinsfile** (declarative): `ENVIRONMENT` and `PLAN_ONLY` parameters; parallel
+  fmt/validate/test, tflint and checkov stages; `terraform plan -out` with
+  `-detailed-exitcode`; plan text, summary and binary archived; summary commented
+  on the PR; `input` approval restricted to `platform-approvers`; apply only on
+  `master`; per-environment lockable resource held from plan to apply; build
+  timeout, input timeout and workspace cleanup.
+- **GitHub Actions**: `fmt -check`, `validate` with `-backend=false` and
+  `terraform test` for each root, plus tflint (with the AWS ruleset) and checkov.
+  No AWS credentials are needed or available.
+- **State**: S3 backend with the native lockfile (`use_lockfile = true`), one state
+  key per environment. No DynamoDB lock table.
+- **Module `app-host`**: EC2 in private subnets with IMDSv2 required (hop limit 1),
+  encrypted gp3 root volumes, an instance role for Session Manager instead of SSH
+  keys, app-port ingress only from RFC 1918 ranges, HTTPS-only egress.
+- **Validation in the code**: typed variables reject public ingress CIDRs, unknown
+  environments, malformed IDs, unapproved instance families and oversized fleets;
+  a precondition stops a prod plan that would put every instance in one subnet.
+- **Plan summary**: `scripts/plan-summary.sh` turns `terraform show -json` into a
+  Markdown table and lists deletes and replacements first.
+
+## Control model
+
+| Question | Answer |
+| --- | --- |
+| Who can apply? | Only the Jenkins Apply stage, only on `master`, with the `terraform-<env>-apply` credential. People plan with read-only access. |
+| Where do approvals happen? | Twice: PR review in GitHub (code and posted plan together), then the Jenkins `input` gate before apply. prod always stops there; dev stops when the plan is destructive. |
+| How is the plan reviewed? | The PR gets a comment with counts and every changed resource; the full `tfplan.txt` is a build artifact. The applied file is the saved plan from the same build. |
+| What stops two applies racing? | The S3 lockfile on state, plus a Jenkins `lock` per environment held from plan through apply. |
+| How is drift found? | Scheduled `PLAN_ONLY=true` builds on `master`. Exit code 2 from `-detailed-exitcode` marks the build unstable and the summary lists what differs. |
+
+Details: [docs/control-model.md](docs/control-model.md). Reviewer checklist:
+[docs/review-checklist.md](docs/review-checklist.md).
+
+## Quick start
+
+Requirements: Terraform 1.10 or newer (developed on 1.16.0). tflint, checkov and
+jq are optional locally and required on the Jenkins agent.
+
+Run every offline check (fmt, validate, `terraform test`) without AWS credentials:
+
+```bash
+scripts/check.sh
 ```
 
-The Terraform creates a small EC2 fleet behind a security group. HTTP and SSH CIDR ranges are variables so the same workflow can support demo, lab, or controlled internal environments without editing resource code.
+Or one root at a time:
 
-## Repository Layout
+```bash
+terraform -chdir=modules/app-host init -backend=false
+terraform -chdir=modules/app-host test
+```
+
+Lint and scan:
+
+```bash
+tflint --init
+tflint --recursive --config "$PWD/.tflint.hcl" --format compact
+checkov -d . --framework terraform --compact --quiet
+```
+
+Plan against a real account (needs AWS credentials, an S3 state bucket, and a VPC
+tagged `Name=platform-dev` with subnets tagged `Tier=private`):
+
+```bash
+cp environments/dev/backend.hcl.example environments/dev/backend.hcl   # set your bucket
+terraform -chdir=environments/dev init -backend-config=backend.hcl
+terraform -chdir=environments/dev plan -out=tfplan
+terraform -chdir=environments/dev show -json tfplan > tfplan.json
+scripts/plan-summary.sh tfplan.json dev
+```
+
+### Jenkins setup
+
+- Multibranch Pipeline job on this repo, agents labelled `terraform` with
+  terraform, tflint, checkov and jq installed.
+- Global environment variable `TF_STATE_BUCKET`.
+- AWS credentials `terraform-dev-plan`, `terraform-dev-apply`,
+  `terraform-prod-plan`, `terraform-prod-apply` (CloudBees AWS Credentials).
+- A `platform-approvers` group for the prod gate.
+- Plugins: Pipeline, GitHub Branch Source, Pipeline: GitHub, Credentials Binding,
+  CloudBees AWS Credentials, Lockable Resources, Parameterized Scheduler,
+  Workspace Cleanup, AnsiColor, Timestamper, JUnit.
+- Branch protection on `master` requiring the GitHub Actions checks and a review.
+
+## Design notes
+
+- **A root per environment, one shared module.** `environments/dev` and
+  `environments/prod` are thin roots that call `modules/app-host`. Everything that
+  differs between environments is committed in each root's `main.tf`, so promoting
+  a change to prod is a visible diff, not a different `.tfvars` file on someone's
+  machine. Each root has its own state key and lock.
+- **S3 native locking over DynamoDB.** Terraform 1.10 added lockfiles to the S3
+  backend using conditional writes, and DynamoDB locking is deprecated. One fewer
+  resource to provision and grant. To migrate an existing stack, set both
+  `use_lockfile` and `dynamodb_table` for one release, then drop the table.
+- **Saved plans only.** Apply never re-plans. What the approver saw is what runs,
+  and the Jenkins lock means nothing else can change the environment in between.
+- **Network is someone else's stack.** The roots look up the VPC and private
+  subnets by tag, so this stack cannot modify networking.
+- **AMI is pinned by name.** Bumping it is a pull request whose plan shows the
+  instance replacement, instead of a silent change the next time the latest AMI
+  moves.
+- **No SSH.** No key pair, no port 22; operators use `aws ssm start-session`
+  (the roots output the command for each instance).
+
+## Testing
+
+`terraform test` runs with `mock_provider "aws"`, so it needs no credentials and
+makes no API calls. The module suite (12 runs) asserts IMDSv2, encrypted gp3,
+Session Manager wiring, no port 22, private placement across subnets, one rule per
+CIDR and HTTPS-only egress, and checks that bad input fails: public or look-alike
+private CIDRs, unknown environments, oversized fleets, and prod on a single
+subnet. Each environment root has its own test with mocked data sources that
+checks its committed sizing and subnet spread.
+
+![scripts/check.sh: fmt, validate and terraform test for every root](docs/images/check.png)
+
+![tflint and checkov with no findings](docs/images/lint-and-scan.png)
+
+## Project layout
 
 ```text
 .
-├── Jenkinsfile      # CI/CD workflow for plan and gated apply
-├── docs/            # Reviewer and operational guidance
-├── backend/         # Backend examples for state and locking
-├── env/             # Environment variable examples
-├── main.tf          # Provider, backend, EC2, security group
-├── variables.tf     # Typed inputs and validation
-└── output.tf        # Instance IDs and public IPs
+├── Jenkinsfile                       # plan on every branch, gated apply on master
+├── .github/workflows/
+│   └── terraform-static-checks.yml   # fmt, validate, test, tflint, checkov on PRs
+├── .tflint.hcl                       # tflint config with the AWS ruleset
+├── modules/app-host/                 # hardened EC2 service module
+│   └── tests/app_host.tftest.hcl     # mocked-provider unit tests
+├── environments/
+│   ├── dev/                          # dev root: settings, backend key, test
+│   └── prod/                         # prod root: settings, backend key, test
+├── scripts/
+│   ├── check.sh                      # offline fmt + validate + test for all roots
+│   └── plan-summary.sh               # Markdown summary of a saved plan
+└── docs/
+    ├── control-model.md              # gates, credentials, locking, drift
+    ├── review-checklist.md           # what to check before approving
+    ├── gitops-flow.html              # source of the flow diagram
+    └── images/                       # screenshots used in this README
 ```
 
-## Jenkins Requirements
+## License
 
-- Terraform 1.5 or newer installed on Jenkins agents
-- AWS credentials stored in Jenkins as `awsCredentials`
-- S3 bucket and DynamoDB lock table for Terraform state
-- Jenkins plugins:
-  - Pipeline
-  - GitHub Branch Source
-  - Credentials Binding
-  - Workspace Cleanup
-  - AnsiColor
-  - CloudBees AWS Credentials
-
-## State Backend
-
-The backend block is intentionally empty in `main.tf`; each environment supplies its own backend configuration:
-
-```bash
-cp backend/dev.hcl.example backend/dev.hcl
-terraform init -backend-config=backend/dev.hcl
-```
-
-For a real deployment, create the S3 bucket and DynamoDB lock table before the first pipeline run.
-
-## Local Commands
-
-```bash
-terraform fmt -recursive
-terraform init -backend-config=backend/dev.hcl
-terraform validate
-terraform plan -var-file=env/dev.tfvars -out=tfplan
-```
-
-## Review Workflow
-
-See [docs/review-checklist.md](docs/review-checklist.md) and [docs/control-model.md](docs/control-model.md) for the checks I would expect before approving a plan. The goal is to make the project demonstrate operational judgment: reviewers should inspect blast radius, access changes, replacement actions, and rollback expectations before applying infrastructure.
-
-## Design Notes
-
-- The configured trunk branch is the only branch allowed to apply infrastructure changes.
-- Non-trunk branches still produce a plan so reviewers can inspect blast radius.
-- CIDR inputs default to private ranges, and SSH ingress is disabled unless an environment explicitly enables it.
-- The EC2 metadata endpoint requires tokens to reduce credential exposure from SSRF-style attacks.
+MIT. See [LICENSE](LICENSE).

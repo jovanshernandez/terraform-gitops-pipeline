@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>GitOps flow</title>
+<style>
+  :root {
+    --bg: #ffffff; --ink: #1f2328; --muted: #59636e; --line: #d1d9e0;
+    --pr: #0969da; --pr-bg: #ddf4ff; --trunk: #1a7f37; --trunk-bg: #dafbe1;
+    --drift: #9a6700; --drift-bg: #fff8c5; --gate: #cf222e; --gate-bg: #ffebe9;
+    --card: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  .wrap { padding: 28px 36px 26px; }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 650; }
+  .sub { color: var(--muted); margin: 0 0 22px; font-size: 14px; }
+  .lane { display: grid; grid-template-columns: 170px 1fr; gap: 16px; align-items: stretch; margin-bottom: 16px; }
+  .tag { border-radius: 10px; padding: 12px 14px; font-weight: 650; font-size: 14px; display: flex; flex-direction: column; justify-content: center; }
+  .tag small { display: block; font-weight: 400; font-size: 12.5px; margin-top: 3px; color: var(--muted); }
+  .pr .tag { background: var(--pr-bg); color: var(--pr); }
+  .trunk .tag { background: var(--trunk-bg); color: var(--trunk); }
+  .drift .tag { background: var(--drift-bg); color: var(--drift); }
+  .steps { display: flex; align-items: center; gap: 0; }
+  .step { flex: 1 1 0; align-self: stretch; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 92px; }
+  .step b { display: block; font-size: 14px; margin-bottom: 3px; }
+  .step span { color: var(--muted); font-size: 12.5px; display: block; }
+  .step code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: #eaeef2; padding: 1px 4px; border-radius: 4px; color: var(--ink); }
+  .pr .step { border-top: 3px solid var(--pr); }
+  .trunk .step { border-top: 3px solid var(--trunk); }
+  .drift .step { border-top: 3px solid var(--drift); }
+  .step.gate { background: var(--gate-bg); border-color: #ffcecb; border-top-color: var(--gate); }
+  .arrow { flex: 0 0 26px; text-align: center; color: #8c959f; font-size: 20px; }
+  .merge { margin: -4px 0 12px 186px; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .merge .line { flex: 0 0 22px; height: 22px; border-left: 2px dashed #8c959f; margin-left: 40px; }
+  .foot { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 20px; }
+  .box { border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; font-size: 13px; color: var(--muted); }
+  .box b { color: var(--ink); display: block; font-size: 13.5px; margin-bottom: 2px; }
+  .box code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: #eaeef2; padding: 1px 4px; border-radius: 4px; color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>terraform-gitops-pipeline: how a change reaches AWS</h1>
+  <p class="sub">One Jenkinsfile, one root per environment. Every branch plans; only <code>master</code> applies, and only the saved plan that was reviewed.</p>
+
+  <div class="lane pr">
+    <div class="tag">Pull request<small>any branch, no apply credentials</small></div>
+    <div class="steps">
+      <div class="step"><b>Static checks</b><span><code>fmt</code> <code>validate</code> <code>terraform test</code> tflint, checkov (GitHub Actions + Jenkins)</span></div>
+      <div class="arrow">&#8594;</div>
+      <div class="step"><b>Plan</b><span><code>plan -out=tfplan</code> with the read-only <code>terraform-&lt;env&gt;-plan</code> role</span></div>
+      <div class="arrow">&#8594;</div>
+      <div class="step"><b>Plan posted for review</b><span>counts + changed resources, deletes first, commented on the PR; full plan archived</span></div>
+      <div class="arrow">&#8594;</div>
+      <div class="step"><b>Code review</b><span>reviewers approve the diff and the plan together, then merge</span></div>
+    </div>
+  </div>
+
+  <div class="merge"><div class="line"></div>merge to master triggers the trunk build</div>
+
+  <div class="lane trunk">
+    <div class="tag">Trunk<small><code>master</code> only</small></div>
+    <div class="steps">
+      <div class="step"><b>Checks + lock</b><span>same static checks, then hold <code>terraform-&lt;env&gt;</code> lock until apply ends</span></div>
+      <div class="arrow">&#8594;</div>
+      <div class="step"><b>Plan</b><span>fresh saved plan from the merged commit, archived and fingerprinted</span></div>
+      <div class="arrow">&#8594;</div>
+      <div class="step gate"><b>Approval gate</b><span><code>input</code> by platform-approvers. prod: always. dev: only on delete or replace.</span></div>
+      <div class="arrow">&#8594;</div>
+      <div class="step"><b>Apply saved plan</b><span><code>apply tfplan</code> with the <code>terraform-&lt;env&gt;-apply</code> role, bound only here</span></div>
+    </div>
+  </div>
+
+  <div class="lane drift">
+    <div class="tag">Nightly drift check<small>master, <code>PLAN_ONLY=true</code></small></div>
+    <div class="steps">
+      <div class="step"><b>Plan only</b><span><code>plan -detailed-exitcode</code> for dev and prod, never applies</span></div>
+      <div class="arrow">&#8594;</div>
+      <div class="step"><b>Exit code 2 = drift</b><span>build marked unstable; summary names the resources that differ</span></div>
+      <div class="arrow">&#8594;</div>
+      <div class="step"><b>Fix through a PR</b><span>accept live state in code, or merge to put it back; back to the top lane</span></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="box"><b>State and locking</b>S3 key per environment, encrypted; <code>use_lockfile = true</code> takes the lock with an S3 conditional write. No DynamoDB table.</div>
+    <div class="box"><b>Environment config is code</b><code>environments/dev</code> and <code>environments/prod</code> call one module; sizes, CIDRs and the AMI pin are committed.</div>
+    <div class="box"><b>Hosts</b>Private subnets, IMDSv2 only, encrypted gp3, Session Manager instead of SSH, ingress limited to RFC 1918 ranges.</div>
+  </div>
+</div>
+</body>
+</html>
