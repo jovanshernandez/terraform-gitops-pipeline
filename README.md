@@ -148,6 +148,10 @@ checks its committed sizing and subnet spread.
 
 ![tflint and checkov with no findings](docs/images/lint-and-scan.png)
 
+The same checks on GitHub Actions for the commit that added them:
+
+![GitHub Actions run: fmt, validate, test per root, tflint and checkov all passing](docs/images/actions-run.png)
+
 ## Project layout
 
 ```text
